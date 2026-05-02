@@ -1,4 +1,5 @@
 .env
 .spotify_cache
+prefixes.json
 __pycache__/
 *.pyc

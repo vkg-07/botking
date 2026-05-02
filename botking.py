@@ -4,12 +4,33 @@ import random
 import asyncio
 from collections import deque
 import os
+import json
 import yt_dlp
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Per-guild prefix storage
+
+PREFIXES_FILE = "prefixes.json"
+
+def _load_prefixes() -> dict[int, str]:
+    try:
+        with open(PREFIXES_FILE) as f:
+            return {int(k): v for k, v in json.load(f).items()}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _save_prefixes() -> None:
+    with open(PREFIXES_FILE, "w") as f:
+        json.dump({str(k): v for k, v in guild_prefixes.items()}, f)
+
+guild_prefixes: dict[int, str] = _load_prefixes()
+
+# ---------------------------------------------------------------------------
 
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
     client_id=os.getenv("SPOTIFY_CLIENT_ID"),
@@ -89,6 +110,14 @@ async def on_message(message):
             bot.jam_task = None
         vc.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTS))
         await message.channel.send(f"Now playing: **{query}** :notes:")
+        return
+
+    if message.guild:
+        pfx = guild_prefixes.get(message.guild.id)
+        if pfx and message.content.startswith(pfx):
+            parts = message.content[len(pfx):].strip().split(maxsplit=1)
+            if parts:
+                await handle_prefix_command(message, parts[0].lower(), parts[1] if len(parts) > 1 else "")
 
 @bot.event
 async def on_ready():
@@ -478,5 +507,182 @@ async def exit_vc(interaction: Interaction):
 @bot.tree.command(name="help", description="Show all available commands")
 async def help_cmd(interaction: Interaction):
     await interaction.response.send_message(embed=build_help_embed("en"), view=HelpView())
+
+@bot.tree.command(name="prefix", description="Set a text prefix for commands (e.g. ! → !py, !skip). Leave empty to remove.")
+@app_commands.describe(prefix="Prefix character(s) to use. Leave empty to remove the current prefix.")
+async def set_prefix(interaction: Interaction, prefix: str = ""):
+    if prefix == "/":
+        await interaction.response.send_message("Can't use `/` as a prefix — it conflicts with slash commands.", ephemeral=True)
+        return
+    if not prefix:
+        guild_prefixes.pop(interaction.guild_id, None)
+        _save_prefixes()
+        await interaction.response.send_message("Prefix removed. Slash commands only.", ephemeral=True)
+        return
+    guild_prefixes[interaction.guild_id] = prefix
+    _save_prefixes()
+    cmds = " ".join(f"`{prefix}{c}`" for c in ("py", "yt", "jam", "skip", "pause", "stop", "clear", "exit", "help"))
+    await interaction.response.send_message(f"Prefix set to `{prefix}` — {cmds}", ephemeral=True)
+
+# ---------------------------------------------------------------------------
+
+async def handle_prefix_command(message: discord.Message, cmd: str, args: str):
+    ch = message.channel
+    vc = message.guild.voice_client
+
+    if cmd == "help":
+        await ch.send(embed=build_help_embed("en"), view=HelpView())
+        return
+
+    if cmd == "skip":
+        if not vc or not vc.is_playing():
+            await ch.send("Nothing is playing right now.")
+            return
+        in_jam = bot.jam_task and not bot.jam_task.done()
+        if song_queue:
+            await ch.send(f"Skipping... next up: **{song_queue[0]}** :track_next:")
+        elif in_jam:
+            await ch.send("Skipping... Spotify takes back control :headphones:")
+        else:
+            await ch.send("Skipping... no more tracks in the queue.")
+        vc.stop()
+        return
+
+    if cmd == "pause":
+        if not vc:
+            await ch.send("I'm not in a voice channel.")
+            return
+        if vc.is_paused():
+            vc.resume()
+            bot.paused = False
+            await ch.send("Resumed :arrow_forward:")
+        elif vc.is_playing():
+            vc.pause()
+            bot.paused = True
+            await ch.send("Paused :pause_button:")
+        else:
+            await ch.send("Nothing is playing right now.")
+        return
+
+    if cmd == "stop":
+        if bot.jam_task:
+            bot.jam_task.cancel()
+            bot.jam_task = None
+        bot.jam_paused = False
+        bot.paused = False
+        song_queue.clear()
+        if vc and (vc.is_playing() or vc.is_paused()):
+            vc.stop()
+            await ch.send("Stopped :stop_button:")
+        else:
+            await ch.send("Nothing to stop.")
+        return
+
+    if cmd == "clear":
+        if not song_queue and not bot.jam_paused:
+            await ch.send("The queue is already empty.")
+            return
+        song_queue.clear()
+        bot.jam_paused = False
+        await ch.send("Queue cleared :wastebasket:")
+        return
+
+    if cmd == "exit":
+        if bot.jam_task:
+            bot.jam_task.cancel()
+            bot.jam_task = None
+        bot.jam_paused = False
+        bot.paused = False
+        song_queue.clear()
+        if vc:
+            await vc.disconnect()
+            await ch.send("Bye!")
+        else:
+            await ch.send("I'm not in any voice channel.")
+        return
+
+    if cmd in ("py", "yt", "jam"):
+        if not args and cmd != "jam":
+            pfx = guild_prefixes.get(message.guild.id, "")
+            await ch.send(f"Usage: `{pfx}{cmd} <song>`")
+            return
+        if not message.author.voice:
+            await ch.send("You need to be in a voice channel!")
+            return
+        voice_ch = message.author.voice.channel
+        if vc:
+            await vc.move_to(voice_ch)
+        else:
+            vc = await voice_ch.connect()
+
+        if cmd == "jam":
+            song_queue.clear()
+            bot.jam_paused = False
+            track = await asyncio.to_thread(current_track)
+            if track:
+                url = await asyncio.to_thread(fetch_audio_url, f"{track['artist']} - {track['name']}")
+                if vc.is_playing():
+                    vc.stop()
+                vc.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTS))
+                await ch.send(f"Now playing: **{track['name']}** — {track['artist']}\nSyncing with your Spotify JAM :headphones:")
+            else:
+                await ch.send("Nothing playing on Spotify right now. I'll start when something does :headphones:")
+            if bot.jam_task:
+                bot.jam_task.cancel()
+            bot.jam_task = asyncio.create_task(sync_loop(vc, track['id'] if track else None, ch))
+            return
+
+        if cmd == "py":
+            if bot.jam_task and not bot.jam_task.done():
+                track_info = await asyncio.to_thread(search_spotify_track, args)
+                if not track_info:
+                    pfx = guild_prefixes.get(message.guild.id, "")
+                    await ch.send(f"Couldn't find `{args}` on Spotify. Try `{pfx}yt` to search YouTube instead.")
+                    return
+                try:
+                    await asyncio.to_thread(sp.add_to_queue, track_info['uri'])
+                except Exception as e:
+                    await ch.send(f"Failed to queue on Spotify: `{e}`")
+                    return
+                await ch.send(f"Added to Spotify queue: **{track_info['name']}** — {track_info['artist']} :notes:")
+                return
+            if vc.is_playing():
+                song_queue.append(args)
+                await ch.send(f"Added to queue (#{len(song_queue)}): **{args}** :notes:")
+                return
+            try:
+                url = await asyncio.to_thread(fetch_audio_url, args)
+            except Exception:
+                await ch.send(f"Nothing found for `{args}`.")
+                return
+            vc.play(
+                discord.FFmpegPCMAudio(url, **FFMPEG_OPTS),
+                after=lambda e: asyncio.run_coroutine_threadsafe(play_next(vc, ch), bot.loop)
+            )
+            await ch.send(f"Now playing: **{args}** :notes:")
+            return
+
+        if cmd == "yt":
+            if bot.jam_task and not bot.jam_task.done():
+                song_queue.append(args)
+                bot.jam_paused = True
+                await ch.send(f"Added to YouTube JAM queue (#{len(song_queue)}): **{args}** :notes:")
+                return
+            if vc.is_playing():
+                song_queue.append(args)
+                await ch.send(f"Added to queue (#{len(song_queue)}): **{args}** :notes:")
+                return
+            try:
+                url = await asyncio.to_thread(fetch_audio_url, args)
+            except Exception:
+                await ch.send(f"Nothing found for `{args}`.")
+                return
+            vc.play(
+                discord.FFmpegPCMAudio(url, **FFMPEG_OPTS),
+                after=lambda e: asyncio.run_coroutine_threadsafe(play_next(vc, ch), bot.loop)
+            )
+            await ch.send(f"Now playing: **{args}** :notes:")
+
+# ---------------------------------------------------------------------------
 
 bot.run(os.getenv("DISCORD_TOKEN"))
