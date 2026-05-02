@@ -14,5 +14,5 @@ sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
 ))
 
 user = sp.current_user()
-print(f"Autenticado como: {user['display_name']}")
-print("Token guardado en .spotify_cache — ya podés correr el bot.")
+print(f"Authenticated as: {user['display_name']}")
+print("Token saved to .spotify_cache — you can now run the bot.")
