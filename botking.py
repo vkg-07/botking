@@ -230,6 +230,58 @@ async def play_next_jam(vc: discord.VoiceClient, channel: discord.TextChannel):
         await play_next_jam(vc, channel)
 
 # ---------------------------------------------------------------------------
+# Help
+
+def build_help_embed(lang: str) -> discord.Embed:
+    if lang == "en":
+        embed = discord.Embed(title="botking — commands", color=0x1DB954)
+        embed.add_field(name="🎵  Music", value=(
+            "`/jam` — Sync your Spotify into the voice channel in real time\n"
+            "`/py <song>` — In JAM: queue on Spotify (no desync). Otherwise: play via YouTube\n"
+            "`/yt <song>` — Queue a YouTube track (works in JAM, accepts desync)\n"
+            "`/skip` — Skip the current track\n"
+            "`/pause` — Pause / resume\n"
+            "`/stop` — Stop playback and clear queue, stay in channel\n"
+            "`/clear` — Clear the YouTube queue\n"
+            "`/exit` — Disconnect from voice channel\n"
+            "`botking play <song>` — Immediately play a song (text command)"
+        ), inline=False)
+        embed.add_field(name="🎲  Fun", value=(
+            "`/ruleta` — Pick a CS2 side (CT / TT / Dice)\n"
+            "`/listo` — Ready check"
+        ), inline=False)
+    else:
+        embed = discord.Embed(title="botking — comandos", color=0x1DB954)
+        embed.add_field(name="🎵  Música", value=(
+            "`/jam` — Sincroniza tu Spotify al canal de voz en tiempo real\n"
+            "`/py <canción>` — En JAM: encola en Spotify (sin desync). Si no: reproduce por YouTube\n"
+            "`/yt <canción>` — Encola un tema de YouTube (funciona en JAM, acepta desync)\n"
+            "`/skip` — Saltea el tema actual\n"
+            "`/pause` — Pausar / reanudar\n"
+            "`/stop` — Para la reproducción y limpia la cola, queda en el canal\n"
+            "`/clear` — Limpia la cola de YouTube\n"
+            "`/exit` — Desconectar del canal de voz\n"
+            "`botking play <canción>` — Reproduce de inmediato (comando de texto)"
+        ), inline=False)
+        embed.add_field(name="🎲  Diversión", value=(
+            "`/ruleta` — Elige un lado en CS2 (CT / TT / Dados)\n"
+            "`/listo` — Listo"
+        ), inline=False)
+    return embed
+
+
+class HelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.lang = "en"
+
+    @discord.ui.button(label="Ver en Español", style=discord.ButtonStyle.secondary)
+    async def toggle_lang(self, interaction: Interaction, button: discord.ui.Button):
+        self.lang = "es" if self.lang == "en" else "en"
+        button.label = "Ver en Español" if self.lang == "en" else "View in English"
+        await interaction.response.edit_message(embed=build_help_embed(self.lang), view=self)
+
+# ---------------------------------------------------------------------------
 # Voice commands
 
 @bot.tree.command(description="Play a song or queue it if something is already playing")
@@ -422,5 +474,9 @@ async def exit_vc(interaction: Interaction):
         await interaction.response.send_message("I'm not in any voice channel.", ephemeral=True)
 
 # ---------------------------------------------------------------------------
+
+@bot.tree.command(name="help", description="Show all available commands")
+async def help_cmd(interaction: Interaction):
+    await interaction.response.send_message(embed=build_help_embed("en"), view=HelpView())
 
 bot.run(os.getenv("DISCORD_TOKEN"))
