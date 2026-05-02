@@ -40,6 +40,7 @@ class Bot(Client):
         self.tree = app_commands.CommandTree(self)
         self.jam_task: asyncio.Task | None = None
         self.jam_paused: bool = False  # True while a YouTube-queued song is playing mid-JAM
+        self.paused: bool = False
 
     async def setup_hook(self) -> None:
         await self.tree.sync()
@@ -151,6 +152,9 @@ async def sync_loop(vc: discord.VoiceClient, initial_id: str, channel: discord.T
         try:
             if not vc.is_connected():
                 break
+
+            if bot.paused:
+                continue
 
             # YouTube queue takes priority: wait for current track to finish, then play next
             if bot.jam_paused:
@@ -362,12 +366,54 @@ async def jam(interaction: Interaction):
         bot.jam_task.cancel()
     bot.jam_task = asyncio.create_task(sync_loop(vc, track['id'] if track else None, interaction.channel))
 
-@bot.tree.command(description="Disconnect the bot from the voice channel")
-async def salir(interaction: Interaction):
+@bot.tree.command(description="Pause or resume the current track")
+async def pause(interaction: Interaction):
+    vc = interaction.guild.voice_client
+    if not vc:
+        await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
+        return
+    if vc.is_paused():
+        vc.resume()
+        bot.paused = False
+        await interaction.response.send_message("Resumed :arrow_forward:")
+    elif vc.is_playing():
+        vc.pause()
+        bot.paused = True
+        await interaction.response.send_message("Paused :pause_button:")
+    else:
+        await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+
+@bot.tree.command(description="Stop playback and clear the queue, but stay in the channel")
+async def stop(interaction: Interaction):
     if bot.jam_task:
         bot.jam_task.cancel()
         bot.jam_task = None
     bot.jam_paused = False
+    bot.paused = False
+    song_queue.clear()
+    vc = interaction.guild.voice_client
+    if vc and (vc.is_playing() or vc.is_paused()):
+        vc.stop()
+        await interaction.response.send_message("Stopped :stop_button:")
+    else:
+        await interaction.response.send_message("Nothing to stop.", ephemeral=True)
+
+@bot.tree.command(description="Clear the YouTube queue (in JAM mode, Spotify sync resumes immediately)")
+async def clear(interaction: Interaction):
+    if not song_queue and not bot.jam_paused:
+        await interaction.response.send_message("The queue is already empty.", ephemeral=True)
+        return
+    song_queue.clear()
+    bot.jam_paused = False
+    await interaction.response.send_message("Queue cleared :wastebasket:")
+
+@bot.tree.command(name="exit", description="Disconnect the bot from the voice channel")
+async def exit_vc(interaction: Interaction):
+    if bot.jam_task:
+        bot.jam_task.cancel()
+        bot.jam_task = None
+    bot.jam_paused = False
+    bot.paused = False
     song_queue.clear()
     if interaction.guild.voice_client:
         await interaction.guild.voice_client.disconnect()

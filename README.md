@@ -18,7 +18,10 @@ The bot does **not** stream audio from Spotify directly — Spotify's API does n
 | `/py <song>` | In JAM mode: add a song to the **Spotify queue** (no desync). Outside JAM: play or queue via YouTube |
 | `/yt <song>` | Queue a YouTube track. Works inside a JAM (accepts desync — Spotify sync resumes when done) |
 | `/skip` | Skip the current track. In JAM mode with no queue, hands control back to Spotify |
-| `/salir` | Disconnect the bot from the voice channel |
+| `/pause` | Pause or resume the current track |
+| `/stop` | Stop playback and clear the queue, but stay in the channel |
+| `/clear` | Clear the YouTube queue. In JAM mode, Spotify sync resumes immediately |
+| `/exit` | Disconnect the bot from the voice channel |
 | `botking play <song>` | Text command to immediately play a song (stops any active JAM) |
 | `!sync` | Re-sync slash commands in the current server (owner use) |
 
