@@ -1,3 +1,4 @@
+from __future__ import annotations
 from discord import app_commands, Intents, Client, Interaction
 import discord
 import random
